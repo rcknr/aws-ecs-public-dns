@@ -1,25 +1,30 @@
-# Welcome to serverless. Read the docs
-# https://serverless.com/framework/docs/
-
-service: fargate-dns-demo
+service: fargate-public-dns
 
 provider:
   name: aws
-  runtime: nodejs14.x
+  runtime: nodejs16.x
   region: eu-central-1
-  iamRoleStatements:
-    - Effect: "Allow"
-      Action:
-        - "ec2:DescribeNetworkInterfaces"
-        - "ecs:DescribeClusters"
-        - "ecs:ListTagsForResource"
-        - "route53:ChangeResourceRecordSets"
-      Resource: "*"  
+  iam:
+    role:
+      statements:
+        - Effect: "Allow"
+          Action:
+            - "ec2:DescribeNetworkInterfaces"
+            - "ecs:DescribeClusters"
+            - "ecs:DescribeTasks"
+            - "ecs:ListTasks"
+            - "ecs:ListTagsForResource"
+            - "ecs:TagResource"
+            - "ecs:UntagResource"
+            - "route53:GetHostedZone"
+            - "route53:ChangeResourceRecordSets"
+            - "route53:ListResourceRecordSets"
+          Resource: "*"
 
 functions:
-  registerPublicIp:
+  bindPublicIp:
     memorySize: 128
-    handler: src/update-task-dns.handler
+    handler: src/function.handler
     events:
       - cloudwatchEvent:
           event:
@@ -30,13 +35,12 @@ functions:
             detail:
               desiredStatus:
                 - "RUNNING"
+                - "STOPPED"
               lastStatus:
                 - "RUNNING"
 
 package:
-  exclude:
-    - "**"
-  include:
+  patterns:
+    - "!**"
     - src/**
     - node_modules/**
-    - "!node_modules/**/.serverless/**"
