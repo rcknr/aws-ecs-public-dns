@@ -8,16 +8,18 @@
 // Event reference: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_cwe_events.html
 // arn:aws:ecs:eu-central-1:636800907403:service/staging-previews/I_could_not_possibly_love_anything_in_the_world_more_than_I_love_my_dog
 
-const AWS= require("aws-sdk");
+const { EC2 } = require("@aws-sdk/client-ec2");
+const { ECS } = require("@aws-sdk/client-ecs");
+const { Route53 } = require("@aws-sdk/client-route-53");
 
-const ec2 = new AWS.EC2();
-const ecs = new AWS.ECS();
-const route53 = new AWS.Route53();
+const ec2 = new EC2();
+const ecs = new ECS();
+const route53 = new Route53();
 
 /**
- * Upsert a public ip DNS record for the incoming task.
+ * Upsert a public ip DNS record for new task.
  *
- * @param event contains the task in the 'detail' propery
+ * @param event contains the task in the 'detail' property
  */
 exports.handler = async event => {
     console.log('Received event: %j', event);
@@ -25,7 +27,7 @@ exports.handler = async event => {
     const task = event.detail;
     const clusterArn = task.clusterArn;
     const clusterName = clusterArn.split(':cluster/').pop();
-    const tags = await fetchClusterTags(clusterArn)
+    const tags = await getClusterTags(clusterArn)
     const hostedZoneId = tags['hostedZoneId']
     let domain = tags['domain']
 
@@ -48,12 +50,12 @@ exports.handler = async event => {
     const serviceSlug = normalizeName(serviceName);
     const serviceDomain = `${serviceSlug}.${domain}`;
 
-    const publicIps = await ecs.listTasks({cluster: clusterName, serviceName}).promise()
+    const publicIps = await ecs.listTasks({cluster: clusterName, serviceName})
         .then(async ({taskArns: tasks}) => {
-            return tasks.length ? (await ecs.describeTasks({cluster: clusterName, tasks}).promise()).tasks : [];
+            return tasks.length ? (await ecs.describeTasks({cluster: clusterName, tasks})).tasks : [];
         })
         .then(async (tasks) => {
-            return await fetchEniPublicIps(tasks.map(getEniId));
+            return await getEniPublicIps(tasks.map(getEniId));
         });
 
     if (publicIps.length) {
@@ -80,10 +82,10 @@ exports.handler = async event => {
     }
 };
 
-async function fetchClusterTags(clusterArn) {
+async function getClusterTags(clusterArn) {
     const response = await ecs.listTagsForResource({
         resourceArn: clusterArn
-    }).promise();
+    });
 
     return response.tags.reduce((hash, tag) => {
         return Object.assign(hash, {
@@ -92,8 +94,28 @@ async function fetchClusterTags(clusterArn) {
         }, {});
 }
 
+async function updateTags(resourceArn, tags) {
+    const to = Object.entries(tags).reduce((result, [key, value]) => {
+        if (value) {
+            result.add.push({ key, value });
+        } else {
+            result.remove.push(key);
+        }
+
+        return result;
+    }, { add: [], remove: [] });
+
+    if (to.add.length) {
+        await ecs.tagResource({ resourceArn, tags: to.add });
+    }
+
+    if (to.remove.length) {
+        await ecs.untagResource({ resourceArn, tagKeys: to.remove });
+    }
+}
+
 async function getHostedZoneDomain(Id) {
-    const hostedZone = await route53.getHostedZone({ Id }).promise();
+    const hostedZone = await route53.getHostedZone({ Id });
 
     return hostedZone?.HostedZone.Name.replace(/\.$/, '');
 }
@@ -113,12 +135,12 @@ function getEniId(task) {
         ?.value;
 }
 
-async function fetchEniPublicIps(eniIds) {
+async function getEniPublicIps(eniIds) {
     const NetworkInterfaceIds = [eniIds].flat();
 
     if (!NetworkInterfaceIds.length) return [];
 
-    const data = await ec2.describeNetworkInterfaces({ NetworkInterfaceIds }).promise();
+    const data = await ec2.describeNetworkInterfaces({ NetworkInterfaceIds });
 
     return data.NetworkInterfaces.map(NetworkInterface => NetworkInterface?.Association?.PublicIp);
 }
@@ -147,39 +169,17 @@ async function getDnsRecord(HostedZoneId, StartRecordName, StartRecordType = "A"
         HostedZoneId,
         StartRecordName,
         StartRecordType
-    }).promise();
+    });
 
     return data?.ResourceRecordSets?.shift();
 }
 
 async function updateDnsRecord(hostedZoneId, changeRecordSet, comment = "") {
-    let param = {
+    await route53.changeResourceRecordSets({
         ChangeBatch: {
             "Comment": comment,
             "Changes": [changeRecordSet]
         },
         HostedZoneId: hostedZoneId
-    };
-    const updateResult = await route53.changeResourceRecordSets(param).promise();
-    console.log('Updating DNS records result: %j %j', param, updateResult);
-}
-
-async function updateTags(resourceArn, tags) {
-    const to = Object.entries(tags).reduce((result, [key, value]) => {
-        if (value) {
-            result.add.push({ key, value });
-        } else {
-            result.remove.push(key);
-        }
-
-        return result;
-    }, { add: [], remove: [] });
-
-    if (to.add.length) {
-        await ecs.tagResource({ resourceArn, tags: to.add }).promise();
-    }
-
-    if (to.remove.length) {
-        await ecs.untagResource({ resourceArn, tagKeys: to.remove }).promise();
-    }
+    });
 }
