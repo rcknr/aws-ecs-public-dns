@@ -122,8 +122,7 @@ async function getHostedZoneDomain(Id) {
 
 function normalizeName(serviceName) {
     return serviceName.toLowerCase()
-        .replace(/_/g, '-')
-        .replace(/-+/g, '-')
+        .replace(/[_-]+/g, '-')
         .slice(0, 63)
         .replace(/-*$/, '');
 }

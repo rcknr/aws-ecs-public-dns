@@ -57,7 +57,7 @@ test('function works', async () => {
     const event = {
         detail: {
             clusterArn: 'arn:aws:ecs:us-east-1:111122223333:cluster/default',
-            group: 'family:sample-fargate'
+            group: 'family:sample__fargate'
         }
     }
 
